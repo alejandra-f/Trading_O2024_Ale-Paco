@@ -3,7 +3,6 @@ import numpy as np
 import ta
 import optuna
 import itertools
-
 from ipywidgets import Datetime
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -12,7 +11,7 @@ from itertools import product
 from sqlalchemy.dialects.mssql.information_schema import columns
 
 global best_trial_info
-best_trial_info={'best_value': -float(inf), 'best_combination': None, 'best_params':None}
+best_trial_info={'best_value': -float('inf'), 'best_combination': None, 'best_params':None}
 
 def change_dateformat(datasets:list):
     for data in datasets:
@@ -43,7 +42,7 @@ def objective_backtesting(params, data):
     change_dateformat_data(data)
 
     #Definir hiperparámetros a optimizar
-    take_profit_multiplier=paras['take_profit_multiplier']
+    take_profit_multiplier=params['take_profit_multiplier']
     stop_loss_multiplier = params['stop_loss_multiplier']
     n_shares_long = params['n_shares_long']
     n_shares_short = params['n_shares_short']
@@ -175,3 +174,140 @@ def objective(trial, data):
         }
         strats = []
 
+        if com[0] == '1':
+            strats.append("RSI")
+            params["RSI"] ={
+                "window": trial.suggest_int("RSI_window", 1, 30),
+                "up_threshold": trial.suggest_int("RSI_up_threshold", 50, 80),
+                "lw_threshold": trial.suggest_int("RSI_lw_threshold", 30, 50)
+                }
+        if com[1] == '1':
+            strats.append("BB") # Bollinger Bands
+            params["BB"]={
+                "window": trial.suggest_int("BB_window", 1, 30),
+                "window_dev": trial.suggest_float("BB_window_dev", 1.0, 3.0)
+            }
+
+        if com[2] == '1':
+            strats.append("WMA") # Weighted Moving Average
+            params["WMA"]={
+                'window': trial.suggest_int("WMA_window",1,30)
+            }
+
+        if com[3] == '1':
+            strats.append("STO") # Stochastic Oscillator
+            params["STO"]={
+                "k_window": trial.suggest_int("k_window", 1, 30),
+                "d_window": trial.suggest_int("d_window", 1, 20)
+            }
+
+        if com[4] == '1':
+            strats.append("DMI") #Indice de Movimiento Direccional
+            params["DMI"] ={
+                "window": trial.suggest_int("DMI_window", 1, 30)
+            }
+
+        def signal_functions(strats=strats, params=params, data=data):
+
+            # signals = []
+            signal_columns = []
+            # n_strats = len(strats)
+
+            if "RSI" in strats:
+                rsi_params = params["RSI"]
+                window_rsi = rsi_params["window"]
+                up_threshold_rsi = rsi_params["up_threshold"]
+                lw_threshold_rsi = rsi_params["lw_threshold"]
+
+                rsi_indicator = ta.momentum.RSIIndicator(data['Close'], window=window_rsi, fillna=False)
+                data['RSI'] = rsi_indicator.rsi()
+
+                # Definición de señales
+                data['RSI_signal'] = 0
+                data.loc[data['RSI'] < up_threshold_rsi, 'RSI_signal'] = 1  # Señal de compra
+                data.loc[data['RSI'] > lw_threshold_rsi, 'RSI_signal'] = -1  # Señal de venta
+                signal_columns.append('RSI_signal')
+                # signals.append(data['RSI_signal'])
+
+            if "BB" in strats:
+                bb_params = params["BB"]
+                window_bb = bb_params["window"]
+                window_bb_dev = bb_params["window_dev"]
+
+                bb_indicator = ta.volatility.BollingerBands(data['Close'], window=window_bb, window_dev=window_bb_dev, fillna=False)
+                data['BB_hband'] = bb_indicator.bollinger_hband()
+                data['BB_lband'] = bb_indicator.bollinger_lband()
+
+                # Define la señal de compra y venta basada en las Bandas de Bollinger (por ejemplo, cruce de precio y banda)
+                data['BB_signal'] = 0
+                data.loc[data['Close'] < data['BB_lband'], 'BB_signal'] = 1  # Señal de compra
+                data.loc[data['Close'] > data['BB_hband'], 'BB_signal'] = -1  # Señal de venta
+                signal_columns.append('BB_signal')
+
+            if "WMA" in strats:
+                wma_params = params["WMA"]
+                window_wma = wma_params["window"]
+
+                wma_indicator = ta.trend.WMAIndicator(data['Close'], window=window_wma, fillna=False)
+                data['WMA'] = wma_indicator.wma()
+
+                # Define la señal de compra y venta basada en el WMA (por ejemplo, cruzando la señal WMA)
+                data['WMA_signal'] = 0
+                data.loc[data['Close'] > data['WMA'], 'WMA_signal'] = 1  # Señal de compra
+                data.loc[data['Close'] < data['WMA'], 'WMA_signal'] = -1  # Señal de venta
+                signal_columns.append('WMA_signal')
+
+            if "STO" in strats:
+                sto_params = params["STO"]
+                k_window_sto = sto_params["k_window"]
+                d_window_sto = sto_params["d_window"]
+
+                sr_indicator = ta.momentum.StochasticOscillator(data['High'], data['Low'], data['Close'], window=k_window_sto, smooth_window=d_window_sto, fillna=False)
+                data['SR_K'] = sr_indicator.stoch()
+                data['SR_D'] = sr_indicator.stoch_signal()
+
+                # Define la señal de compra y venta basada en el Stochastic Oscillator (por ejemplo, cruce de %K y %D)
+                data['SR_signal'] = 0
+                data.loc[(data['SR_K'] > data['SR_D']) & (data['SR_K'].shift(1) < data['SR_D'].shift(1)), 'SR_signal'] = 1  # Señal de compra
+                data.loc[(data['SR_K'] < data['SR_D']) & (data['SR_K'].shift(1) > data['SR_D'].shift(1)), 'SR_signal'] = -1  # Señal de venta
+                signal_columns.append('SR_signal')
+
+            if "DMI" in strats:
+                dmi_params=params["DMI"]
+                window_dmi = dmi_params["window"]
+
+                adx_indicator = ta.trend.ADXIndicator(data['High'], data['Low'], data['Close'], window=window_dmi, fillna=False)
+                data['ADX'] = adx_indicator.adx()
+                data['DI+'] = adx_indicator.adx_pos()
+                data['DI-'] = adx_indicator.adx_neg()
+
+                # Define la señal de compra y venta basada en el ADX y DI+/DI-
+                data['DMI_signal'] = 0
+                data.loc[(data['DI+'] > data['DI-']) & (data['ADX'] > 20), 'DMI_signal'] = 1  # Señal de compra
+                data.loc[(data['DI+'] < data['DI-']) & (data['ADX'] > 20), 'DMI_signal'] = -1  # Señal de venta
+                signal_columns.append('DMI_signal')
+
+            data['general_signals'] = data[signal_columns].mean(axis=1, skipna=True)
+
+            # Asignar valores en la nueva columna según las condiciones
+            data.loc[data['general_signals'] > 0.4, 'general_signals'] = 1
+            data.loc[(data['general_signals'] >= -0.4) & (data['general_signals'] <= 0.4), 'general_signals'] = 0
+            data.loc[data['general_signals'] < -0.4, 'general_signals'] = -1
+            # Si no hay columnas presentes, asignar NaN a la nueva columna
+
+            return data
+
+        data = signal_functions(strats=strats, params=params, data=data)
+        # data.dropna(inplace=True)
+
+        portfolio_value = objective_backtesting(params, data)
+
+        if portfolio_value > best_trial_info['best_value']:
+            best_trial_info['best_value'] = portfolio_value
+            best_trial_info['best_combination'] = com
+            best_trial_info['best_params'] = params.copy()
+
+            # Almacenar información adicional en user_attrs
+            trial.set_user_attr('best_combination', com)
+
+    return best_trial_info['best_value']
