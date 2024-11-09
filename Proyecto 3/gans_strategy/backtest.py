@@ -1,43 +1,30 @@
 import pandas as pd
+from utils.utils import TradingStrategy, calculate_metrics
 
+# Clase para realizar el backtest
 class Backtest:
-    def __init__(self, data, initial_balance=10000):
-        """
-        Inicializa el backtest con los datos de mercado y un saldo inicial.
-        """
+    def __init__(self, data, stop_loss, take_profit):
         self.data = data
-        self.initial_balance = initial_balance
-        self.balance = initial_balance
-        self.position = 0  # Posición actual (1 para largo, -1 para corto)
-        self.history = []  # Historial de operaciones
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.strategy = TradingStrategy(stop_loss, take_profit)
 
-    def run(self):
-        """
-        Ejecuta el backtest de la estrategia en los datos dados.
-        """
-        for i in range(1, len(self.data)):
-            signal = self.data['Signal'].iloc[i]
-            price = self.data['Close'].iloc[i]
+    def run_backtest(self):
+        results = self.strategy.apply_strategy(self.data)
+        metrics = calculate_metrics(results)  # Calcula las métricas
+        return results, metrics
 
-            if signal == 1 and self.position == 0:  # Señal de compra
-                self.position = self.balance / price
-                self.balance -= self.position * price
-                self.history.append(('Compra', price, self.balance))
+# Ejecución del backtest en datos reales y sintéticos
+historical_data = pd.read_csv("data/historical_data.csv")
+synthetic_data = pd.read_csv("data/synthetic_data.csv")
 
-            elif signal == -1 and self.position > 0:  # Señal de venta
-                self.balance += self.position * price
-                self.history.append(('Venta', price, self.balance))
-                self.position = 0
+backtests = []
+for i, scenario in enumerate(synthetic_data["scenarios"]):
+    bt = Backtest(scenario, stop_loss=0.05, take_profit=0.1)
+    results, metrics = bt.run_backtest()
+    backtests.append(metrics)
 
-        # Cerrar cualquier posición restante al final
-        if self.position > 0:
-            self.balance += self.position * self.data['Close'].iloc[-1]
-            self.position = 0
-
-        return self.balance
-
-    def get_history(self):
-        """
-        Devuelve el historial de operaciones como un DataFrame de pandas.
-        """
-        return pd.DataFrame(self.history, columns=['Acción', 'Precio', 'Balance'])
+# Guardar los resultados
+results_df = pd.DataFrame(backtests)
+results_df.to_csv("data/backtest_results.csv", index=False)
+print("Resultados del backtest guardados en data/backtest_results.csv")
